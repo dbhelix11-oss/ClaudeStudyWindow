@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+
+# personal runtime data for this project's own captured notes -- not code
+QUICKREF.md
+sources.json
