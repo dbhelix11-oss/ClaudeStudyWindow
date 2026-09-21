@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-20
+
+- Toggling the panel visible now re-attaches the file watcher and reloads
+  content first, so switching to a brand-new project whose `QUICKREF.md`
+  didn't exist yet (nothing to watch until the first clipboard capture
+  creates it) picks up the file once it appears.
+- Captured entries can now be named: "Name this capture..." /
+  "Rename this capture..." on the right-click context menu. The name is
+  stored as a heading line in `QUICKREF.md` right after the entry's
+  timestamp and renders bold and larger than the note body, so named
+  entries stand out when scanning notes.
+
 ## 2026-08-31
 
 Initial commit. PyQt6 always-on-top study-notes panel (`panel.py`) with a

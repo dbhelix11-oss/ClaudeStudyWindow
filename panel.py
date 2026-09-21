@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
     QHBoxLayout,
+    QInputDialog,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -41,13 +42,23 @@ except ImportError:
 QUICKREF = transcript.DEFAULT_PROJECT_DIR / transcript.NOTES_FILENAME
 TIMESTAMP_RE = re.compile(r"captured (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
+# an optional user-given name, stored as its own heading line right after
+# the "captured ..." line so it renders bold and larger than the note body
+# (styled via the h4 rule in MARKDOWN_CSS) without disturbing the raw
+# captured text that follows it. The pin marks it as ours to parse back out,
+# as opposed to a heading the pasted content itself happens to start with.
+NAME_LINE_PREFIX = "#### \U0001F4CC "
+NAME_HEADER_RE = re.compile(r"^#### \U0001F4CC [^\n]+\n\n")
+
 # matches one whole captured entry exactly as capture.py appends it -- from
 # its leading "---" separator through to (but not including) the next
 # entry's separator, or end of file. Deleting a match removes precisely
 # what was appended for that capture, leaving neighboring entries and any
-# hand-written notes above them untouched.
+# hand-written notes above them untouched. group(2) is the optional name
+# line's text, if the entry has been given one.
 CAPTURE_ENTRY_RE = re.compile(
     r"\n---\n\n\*captured (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\*\n\n"
+    r"(?:#### \U0001F4CC ([^\n]+)\n\n)?"
     r".*?(?=\n---\n\n\*captured \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\*\n\n|\Z)",
     re.DOTALL,
 )
@@ -63,6 +74,36 @@ def delete_capture_entry(notes_path: Path, timestamp: str) -> bool:
         if match.group(1) == timestamp:
             notes_path.write_text(text[: match.start()] + text[match.end() :])
             return True
+    return False
+
+
+def get_capture_name(notes_path: Path, timestamp: str) -> str | None:
+    """Return the display name currently set on one captured entry, or
+    None if it has no name (or the entry can't be found)."""
+    if not notes_path.exists():
+        return None
+    text = notes_path.read_text()
+    for match in CAPTURE_ENTRY_RE.finditer(text):
+        if match.group(1) == timestamp:
+            return match.group(2)
+    return None
+
+
+def rename_capture_entry(notes_path: Path, timestamp: str, name: str) -> bool:
+    """Set (or, if name is empty, clear) the display name on one captured
+    entry, identified by its timestamp. Returns True if the entry was found."""
+    if not notes_path.exists():
+        return False
+    text = notes_path.read_text()
+    for match in CAPTURE_ENTRY_RE.finditer(text):
+        if match.group(1) != timestamp:
+            continue
+        prefix = f"\n---\n\n*captured {timestamp}*\n\n"
+        body = NAME_HEADER_RE.sub("", match.group(0)[len(prefix) :], count=1)
+        name_line = f"{NAME_LINE_PREFIX}{name}\n\n" if name else ""
+        new_entry = prefix + name_line + body
+        notes_path.write_text(text[: match.start()] + new_entry + text[match.end() :])
+        return True
     return False
 
 # File -> Project lists every folder here. Each project's own study notes
@@ -177,6 +218,7 @@ body { font-family: Georgia, 'Noto Serif', serif; font-size: 14px; }
 h1, h2, h3 { color: #7c4a2d; }
 h1 { border-bottom: 2px solid #d8b96a; padding-bottom: 4px; }
 h2 { border-bottom: 1px solid #d8c9a3; padding-bottom: 2px; }
+h4 { color: #a5693c; font-size: 19px; font-weight: bold; }
 code { background-color: #eadfc4; padding: 1px 4px; border-radius: 3px; }
 pre { background-color: #eadfc4; padding: 8px; border-radius: 4px; }
 a { color: #a5693c; }
@@ -327,6 +369,12 @@ class QuickRefPanel(QMainWindow):
         if self.isVisible() and not self.isMinimized():
             self.hide()
         else:
+            # a brand-new project's QUICKREF.md may not have existed yet
+            # when it was selected (nothing to watch until capture.py
+            # creates it on the first clipboard capture) -- retry attaching
+            # the watcher and refresh in case that's happened since
+            self._watch_file()
+            self.load_content()
             self.showNormal()
             self.raise_()
             self.activateWindow()
@@ -456,9 +504,37 @@ class QuickRefPanel(QMainWindow):
             if source:
                 context_action = menu.addAction("Show original context")
                 context_action.triggered.connect(lambda: self.open_context_dialog(source))
+            existing_name = get_capture_name(self.notes_path, timestamp)
+            rename_label = "Rename this capture..." if existing_name else "Name this capture..."
+            rename_action = menu.addAction(rename_label)
+            rename_action.triggered.connect(lambda: self.rename_capture(timestamp, existing_name))
             delete_action = menu.addAction("Delete this capture")
             delete_action.triggered.connect(lambda: self.delete_capture(timestamp))
         menu.exec(self.browser.mapToGlobal(pos))
+
+    def rename_capture(self, timestamp: str, existing_name: str | None):
+        name, ok = QInputDialog.getText(
+            self,
+            "Name this capture",
+            "Name (leave blank to remove):",
+            QLineEdit.EchoMode.Normal,
+            existing_name or "",
+        )
+        if not ok:
+            return
+
+        name = name.strip()
+        if not rename_capture_entry(self.notes_path, timestamp, name):
+            QMessageBox.warning(
+                self, "Not found", "Could not locate that capture -- the notes file may have changed."
+            )
+            return
+
+        self.load_content()
+        if name:
+            self.statusBar().showMessage(f"Named capture from {timestamp}: {name}", 4000)
+        else:
+            self.statusBar().showMessage(f"Cleared name for capture from {timestamp}", 4000)
 
     def delete_capture(self, timestamp: str):
         reply = QMessageBox.question(
