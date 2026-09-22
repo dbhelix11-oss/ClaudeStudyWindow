@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-21
+
+- Named captures now display at the very top of the notes view, ordered by
+  when they were (re)named (most recently named first), ahead of all
+  unnamed entries which keep their original capture order. Naming time is
+  tracked in a new per-project `capture_names.json` sidecar (gitignored);
+  `QUICKREF.md` itself is untouched and stays in capture order on disk.
+
 ## 2026-09-20
 
 - Toggling the panel visible now re-attaches the file watcher and reloads

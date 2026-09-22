@@ -5,3 +5,4 @@ __pycache__/
 # personal runtime data for this project's own captured notes -- not code
 QUICKREF.md
 sources.json
+capture_names.json

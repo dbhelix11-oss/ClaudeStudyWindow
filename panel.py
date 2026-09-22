@@ -3,6 +3,7 @@
 formatted markdown, live-reloads on change, warm library color scheme.
 Run with: ./.venv/bin/python panel.py
 """
+import datetime
 import json
 import re
 import sys
@@ -105,6 +106,62 @@ def rename_capture_entry(notes_path: Path, timestamp: str, name: str) -> bool:
         notes_path.write_text(text[: match.start()] + new_entry + text[match.end() :])
         return True
     return False
+
+
+# per-project sidecar recording *when* each entry was (re)named -- kept
+# separate from the name text itself (which lives in QUICKREF.md, as the
+# human-readable, hand-editable source of truth) so display order can be
+# driven by naming recency without stashing a hidden timestamp inside the
+# visible heading line.
+NAMES_FILENAME = "capture_names.json"
+
+
+def _named_at_path(notes_path: Path) -> Path:
+    return notes_path.parent / NAMES_FILENAME
+
+
+def load_named_at(notes_path: Path) -> dict:
+    path = _named_at_path(notes_path)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_named_at(notes_path: Path, named_at: dict) -> None:
+    _named_at_path(notes_path).write_text(json.dumps(named_at, indent=2))
+
+
+def reorder_named_first(text: str, named_at: dict) -> str:
+    """Render-only reordering: named entries float to the top, most
+    recently named first, followed by every unnamed entry in its original
+    (capture) order. Anything before the first entry (a hand-written
+    intro/header) is left in place. Does not touch the file on disk --
+    QUICKREF.md itself stays in capture order, so appends, deletes and
+    renames (which locate entries by timestamp, not position) are unaffected."""
+    matches = list(CAPTURE_ENTRY_RE.finditer(text))
+    if not matches:
+        return text
+
+    preamble = text[: matches[0].start()]
+    named = []
+    unnamed = []
+    for match in matches:
+        timestamp = match.group(1)
+        if match.group(2) is not None:
+            # fall back to the capture timestamp if a name was set by hand
+            # editing the file rather than through the rename dialog, so it
+            # still sorts sensibly without a recorded naming time
+            sort_key = named_at.get(timestamp, timestamp)
+            named.append((sort_key, match.group(0)))
+        else:
+            unnamed.append(match.group(0))
+
+    named.sort(key=lambda pair: pair[0], reverse=True)
+    return preamble + "".join(entry for _, entry in named) + "".join(unnamed)
+
 
 # File -> Project lists every folder here. Each project's own study notes
 # live at <project folder>/QUICKREF.md; ClaudeStudyWindow's own folder is
@@ -476,6 +533,7 @@ class QuickRefPanel(QMainWindow):
             self.browser.setHtml("<p><em>No study notes found.</em></p>")
             return
         text = self.notes_path.read_text()
+        text = reorder_named_first(text, load_named_at(self.notes_path))
         scrollbar = self.browser.verticalScrollBar()
         was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 4
         self.browser.document().setDefaultStyleSheet(MARKDOWN_CSS)
@@ -530,6 +588,15 @@ class QuickRefPanel(QMainWindow):
             )
             return
 
+        named_at = load_named_at(self.notes_path)
+        if name:
+            # (re)naming counts as a fresh naming action, so it bubbles back
+            # to the top of the named group even if it was named before
+            named_at[timestamp] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            named_at.pop(timestamp, None)
+        save_named_at(self.notes_path, named_at)
+
         self.load_content()
         if name:
             self.statusBar().showMessage(f"Named capture from {timestamp}: {name}", 4000)
@@ -554,6 +621,9 @@ class QuickRefPanel(QMainWindow):
             return
 
         self._remove_source_entry(timestamp)
+        named_at = load_named_at(self.notes_path)
+        if named_at.pop(timestamp, None) is not None:
+            save_named_at(self.notes_path, named_at)
         self.load_content()
         self.statusBar().showMessage(f"Deleted capture from {timestamp}", 4000)
 
